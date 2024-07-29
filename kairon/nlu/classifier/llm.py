@@ -12,7 +12,7 @@ import faiss
 import rasa.utils.io as io_utils
 import os
 from rasa.shared.nlu.constants import TEXT, INTENT
-import openai
+import litellm
 import numpy as np
 from tqdm import tqdm
 from rasa.engine.graph import GraphComponent, ExecutionContext
@@ -25,9 +25,9 @@ if typing.TYPE_CHECKING:
 
 
 @DefaultV1Recipe.register(
-    DefaultV1Recipe.ComponentType.INTENT_CLASSIFIER, is_trainable=False
+    DefaultV1Recipe.ComponentType.INTENT_CLASSIFIER, is_trainable=True
 )
-class OpenAIClassifier(IntentClassifier, GraphComponent, ABC):
+class LLMClassifier(GraphComponent, IntentClassifier, ABC):
     """Intent and Entity classifier using the OpenAI Completion framework"""
 
     system_prompt = "You will be provided with a text, and your task is to classify its intent as {0}. Provide output in json format with the following keys intent, explanation, text."
@@ -42,28 +42,23 @@ class OpenAIClassifier(IntentClassifier, GraphComponent, ABC):
         data: Optional[Dict[Text, Any]] = None,
     ) -> None:
         """Construct a new intent classifier using the OpenAI Completion framework."""
+        self.api_key = None
         self.component_config = config
         self._model_storage = model_storage
         self._resource = resource
         self._execution_context = execution_context
-
         self.load_api_key(config.get("bot_id"))
-        if vector is not None:
-            self.vector = vector
-        else:
-            self.vector = faiss.IndexFlatIP(config.get("embedding_size", 1536))
-
+        self.vector = vector
         self.data = data
-
     @classmethod
     def required_packages(cls) -> List[Text]:
-        return ["openai", "faiss", "numpy"]
+        return ["litellm", "numpy"]
 
     @staticmethod
     def get_default_config() -> Dict[Text, Any]:
         return {
             "bot_id": None,
-            "prediction_model": "gpt-4",
+            "prediction_model": "gpt-4o-mini",
             "embedding_model": "text-embedding-3-small",
             "embedding_size": 1536,
             "top_k": 5,
@@ -77,20 +72,20 @@ class OpenAIClassifier(IntentClassifier, GraphComponent, ABC):
             from kairon.shared.admin.processor import Sysadmin
             llm_secret = Sysadmin.get_llm_secret("openai", bot_id)
             self.api_key = llm_secret.get('api_key')
-        elif os.environ.get("OPENAI_API_KEY"):
-            self.api_key = os.environ.get("OPENAI_API_KEY")
+        elif os.environ.get("API_KEY"):
+            self.api_key = os.environ.get("API_KEY")
         else:
             raise KeyError(
                 f"either set bot_id'in OpenAIClassifier config or set OPENAI_API_KEY in environment variables"
             )
 
     def get_embeddings(self, text):
-        embedding = openai.Embedding.create(
-            model="text-embedding-3-small", input=text, api_key=self.api_key
+        embedding = litellm.embedding(
+            model=self.component_config.get("embedding_model", "text-embedding-3-small"), input=text, api_key=self.api_key
         )["data"][0]["embedding"]
         return embedding
 
-    def process_training_data(self, training_data: TrainingData) -> TrainingData:
+    def train(self, training_data: TrainingData) -> Resource:
         """Train the intent classifier on a data set."""
         data_map = []
         vector_map = []
@@ -98,82 +93,80 @@ class OpenAIClassifier(IntentClassifier, GraphComponent, ABC):
             vector_map.append(self.get_embeddings(example.get(TEXT)))
             data_map.append({"text": example.get(TEXT), "intent": example.get(INTENT)})
         np_vector = np.asarray(vector_map, dtype=np.float32)
-        faiss.normalize_L2(np_vector)
+        self.vector = faiss.IndexFlatIP(len(vector_map[0]))
         self.vector.add(np_vector)
         self.data = data_map
-        return training_data
+        self.persist()
+        return self._resource
 
     def prepare_context(self, embeddings, text):
         dist, indx = self.vector.search(
             np.asarray([embeddings], dtype=np.float32),
             k=self.component_config.get("top_k", 5),
         )
-        labels = ",".join(set(self.data[i]["intent"] for i in indx[0]))
+        context = ""
+        intents = {"nlu_fallback"}
+        for idx, value in enumerate(indx[0]):
+            if dist[0][idx] >= 0.7:
+                context += f"text: {self.data[value]['text']}\nintent: {self.data[value]['intent']}\n\n"
+                intents.add(self.data[value]['intent'])
         messages = [
-            {"role": "system", "content": self.system_prompt.format(labels)},
-        ]
-        context = "\n\n".join(
-            f"\n\ntext: {self.data[i]['text']}\nintent: {self.data[i]['intent']}"
-            for i in indx[0]
-        )
-        messages.append(
+            {"role": "system", "content": self.system_prompt.format(intents)},
             {
                 "role": "user",
-                "content": f"##{self.system_prompt}\n\n##Based on the below sample generate the intent.If text does not belongs to the labels then classify it as nlu_fallback\n\n{context}\n\ntext: {text}",
+                "content": f'''##{self.system_prompt.format(intents)}
+                ##Based on the Intent Context generate the intent.
+                If intent must belongs to {intents}
+                Intent Context:
+                {context}
+                text: {text}
+                intent: 
+                ''',
             }
-        )
-        return messages
+        ]
+        return messages, intents
 
     def predict(self, text):
         embedding = self.get_embeddings(text)
-        messages = self.prepare_context(embedding, text)
-        retry = 0
-        intent = None
-        explanation = None
-        while retry < self.component_config.get("retry", 3):
-            try:
-                response = openai.ChatCompletion.create(
-                    model=self.component_config.get("prediction_model", "gpt-3.5-turbo"),
-                    messages=messages,
-                    temperature=self.component_config.get("temperature", 0.0),
-                    max_tokens=self.component_config.get("max_tokens", 50),
-                    top_p=1,
-                    frequency_penalty=0,
-                    presence_penalty=0,
-                    stop=["\n\n"],
-                    api_key=self.api_key,
-                )
-                logger.debug(response)
-                responses = json.loads(response.choices[0]["message"]["content"])
-                intent = responses["intent"] if "intent" in responses.keys() else None
-                explanation = (
-                    responses["explanation"]
-                    if "explanation" in responses.keys()
-                    else None
-                )
-                break
-            except TimeoutError as e:
-                logger.error(e)
-                retry += 1
-                if retry == 3:
-                    raise e
+        messages, intents = self.prepare_context(embedding, text)
+        response = litellm.completion(
+            model=self.component_config.get("prediction_model", "gpt-4o-mini"),
+            messages=messages,
+            temperature=self.component_config.get("temperature", 0.0),
+            max_tokens=self.component_config.get("max_tokens", 50),
+            api_key=self.api_key,
+            max_retries=self.component_config.get("retry", 3)
+        )
+        logger.debug(response)
+        print(response)
+        responses = json.loads(response.choices[0]["message"]["content"])
+        intent = responses["intent"] if "intent" in responses.keys() else None
+        if intent not in intents:
+            explanation = f"invalid intent predicted {intent}, falling back to nlu_fallback"
+            intent = "nlu_fallback"
+        else:
+            explanation = (
+                responses["explanation"]
+                if "explanation" in responses.keys()
+                else None
+            )
         return intent, explanation
 
-    def process(self, message: Message) -> None:
+    def process(self, messages: List[Message]) -> List[Message]:
         """Return the most likely intent and its probability for a message."""
-
-        if not self.vector and not self.data:
-            # component is either not trained or didn't
-            # receive enough training data
-            intent = None
-            intent_ranking = []
-        else:
-            label, reason = self.predict(message.get(TEXT))
-            intent = {"name": label, "confidence": 1, "reason": reason}
-            intent_ranking = []
-
-        message.set("intent", intent, add_to_output=True)
-        message.set("intent_ranking", intent_ranking, add_to_output=True)
+        for message in messages:
+            if not self.vector and not self.data:
+                # component is either not trained or didn't
+                # receive enough training data
+                intent = None
+                intent_ranking = []
+            else:
+                label, reason = self.predict(message.get(TEXT))
+                intent = {"name": label, "confidence": 1, "reason": reason}
+                intent_ranking = []
+            message.set("intent", intent, add_to_output=True)
+            message.set("intent_ranking", intent_ranking, add_to_output=True)
+        return messages
 
     @classmethod
     def create(
@@ -182,7 +175,7 @@ class OpenAIClassifier(IntentClassifier, GraphComponent, ABC):
         model_storage: ModelStorage,
         resource: Resource,
         execution_context: ExecutionContext,
-    ) -> "OpenAIClassifier":
+    ) -> "LLMClassifier":
         """Creates a new untrained component (see parent class for full docstring)."""
         return cls(config, model_storage, resource, execution_context)
 
@@ -194,21 +187,21 @@ class OpenAIClassifier(IntentClassifier, GraphComponent, ABC):
         resource: Resource,
         execution_context: ExecutionContext,
         **kwargs: Any,
-    ) -> "OpenAIClassifier":
+    ) -> "LLMClassifier":
         """Loads a policy from the storage (see parent class for full docstring)."""
         try:
             with model_storage.read_from(resource) as model_path:
-                vector_file = os.path.join(model_path, config.get("vector"))
-                data_file = os.path.join(model_path, config.get("data"))
+                file_name = cls.__name__
+                vector_file_name = file_name + "_vector.db"
+                data_file_name = file_name + "_data.pkl"
+                vector_file = os.path.join(model_path, vector_file_name)
+                data_file = os.path.join(model_path, data_file_name)
 
-                if os.path.exists(vector_file):
-                    vector = faiss.read_index(vector_file)
-                    data = io_utils.json_unpickle(data_file)
-                    return cls(
-                        config, model_storage, resource, execution_context, vector, data
-                    )
-                else:
-                    return cls(config, model_storage, resource, execution_context)
+                vector = faiss.read_index(vector_file)
+                data = io_utils.json_unpickle(data_file)
+                return cls(
+                    config, model_storage, resource, execution_context, vector, data
+                )
         except ValueError:
             logger.debug(
                 f"Failed to load {cls.__class__.__name__} from model storage. Resource "

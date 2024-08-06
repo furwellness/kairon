@@ -1,5 +1,6 @@
 import asyncio
 import os
+from typing import Dict, List
 from urllib.parse import urljoin
 
 from loguru import logger as logging
@@ -27,6 +28,7 @@ def train_model_for_bot(bot: str):
     :return: model path
 
     """
+    Utility.load_environment()
     processor = MongoProcessor()
     nlu = processor.load_nlu(bot)
     if not nlu.training_examples:
@@ -38,6 +40,7 @@ def train_model_for_bot(bot: str):
         stories = stories.merge(multiflow_stories[0])
         config = processor.load_config(bot)
         config['assistant_id'] = bot
+        Utility.update_config_components(config['pipeline'], bot=bot)
         rules = processor.get_rules_for_training(bot)
         rules = rules.merge(multiflow_stories[1])
 

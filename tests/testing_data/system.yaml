@@ -227,10 +227,15 @@ properties:
 
 core:
   components:
-    - kairon.nlu.featurizer.LanguageModelFeaturizer
-    - kairon.nlu.classifier.LLMClassifier
-    - kairon.nlu.featurizer.LLMFeaturizer
-    - kairon.nlu.tokenizer.BPETokenizer
+    - name: kairon.shared.nlu.featurizer.lm_featurizer.LanguageModelFeaturizer
+    - name: kairon.nlu.featurizer.LanguageModelFeaturizer
+    - name: kairon.nlu.classifier.LLMClassifier
+      keys:
+        - bot_id: bot
+    - name: kairon.nlu.featurizer.LLMFeaturizer
+      keys:
+        - bot_id: bot
+    - name: kairon.nlu.tokenizer.BPETokenizer
   policies:
     - kairon.shared.rule_policy.RulePolicy
   deprecated-components:

@@ -188,15 +188,15 @@ class ChatUtils:
 
         try:
             config = Utility.get_local_db()
-            client = Utility.create_mongo_client(config['host'])
+            db = config.pop('db')
+            client = Utility.create_mongo_client(config)
             with client as client:
-                db = client.get_database(config['db'])
+                db = client.get_database(db)
                 conversations = db.get_collection(bot)
                 logger.debug(
                     f"Loading host: {config['host']}, db:{db.name}, collection: {bot},env: {Utility.environment['env']}"
                 )
                 last_session = ChatUtils.get_last_session(conversations, sender_id)
-                print(last_session)
                 logger.debug(f"last session: {last_session}")
                 if not last_session:
                     return events, message

@@ -1270,6 +1270,18 @@ class Utility:
             raise AppException("Agent config not found!")
 
     @staticmethod
+    def update_config_components(items: List[Dict], **kwargs):
+        kcomponents = {component['name']: component['keys'] for component in Utility.environment['core']['components']
+                       if
+                       'keys' in component}
+        for item in items:
+            if item['name'] in kcomponents.keys():
+                print(kcomponents.get(item['name']))
+                for keys in kcomponents.get(item['name']):
+                    for key in keys:
+                        item[key] = kwargs.get(keys[key])
+
+    @staticmethod
     def reload_model(bot: Text, email: Text):
         from kairon.shared.account.activity_log import UserActivityLogger
 
@@ -1876,16 +1888,21 @@ class Utility:
                 param["value"] = Utility.decrypt_message(param["value"])
 
     @staticmethod
-    def create_mongo_client(url: Text):
+    def create_mongo_client(config: Dict):
         if Utility.environment["env"] == "test":
             from mongomock import MongoClient
 
-            return MongoClient(
-                host=url
+            return MongoClient(host=config['host'],
+                               username=config.get('username'),
+                               password=config.get('password'),
+                               authSource=config['options'].get("authSource") if config['options'].get("authSource") else "admin"
             )
         else:
             from pymongo import MongoClient
-            return MongoClient(host=url)
+            return MongoClient(host=config['host'],
+                               username=config.get('username'),
+                               password=config.get('password'),
+                               authSource=config['options'].get("authSource") if config['options'].get("authSource") else "admin")
 
     @staticmethod
     def get_masked_value(value: Text):

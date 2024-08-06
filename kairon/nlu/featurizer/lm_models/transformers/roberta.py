@@ -1,4 +1,4 @@
-from kairon.shared.nlu.featurizer.lm_models.base import BaseModel
+from kairon.nlu.featurizer.lm_models.base import BaseModel
 from transformers import TFRobertaModel, RobertaTokenizerFast
 from typing import List, Text, Tuple
 from rasa.nlu.utils.hugging_face.transformers_pre_post_processors import roberta_tokens_pre_processor, roberta_embeddings_post_processor, bert_tokens_cleaner

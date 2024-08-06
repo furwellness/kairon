@@ -27,7 +27,7 @@ from rasa.shared.nlu.training_data.message import Message
 from rasa.shared.nlu.training_data.training_data import TrainingData
 from rasa.utils import train_utils
 from rasa.engine.recipes.default_recipe import DefaultV1Recipe
-from kairon.shared.nlu.featurizer.lm_models.factory import ModelFactory
+from kairon.nlu.featurizer.lm_models.factory import ModelFactory
 from rasa.utils.tensorflow.model_data import ragged_array_to_ndarray
 
 logger = logging.getLogger(__name__)

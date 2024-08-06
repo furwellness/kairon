@@ -1,5 +1,4 @@
 import os
-import re
 import shutil
 import tempfile
 import uuid
@@ -8,11 +7,13 @@ from email.mime.text import MIMEText
 from io import BytesIO
 from unittest.mock import patch, MagicMock
 from urllib.parse import urlencode
+
+import yaml
+
 from kairon.shared.utils import Utility, MailUtility
 
 Utility.load_system_metadata()
 
-import numpy as np
 import pandas as pd
 import pytest
 import requests
@@ -32,11 +33,10 @@ from kairon.chat.converters.channels.responseconverter import ElementTransformer
 from kairon.chat.converters.channels.telegram import TelegramResponseConverter
 from kairon.exceptions import AppException
 from kairon.shared.augmentation.utils import AugmentationUtils
-from kairon.shared.constants import GPT3ResourceTypes, LLMResourceProvider
 from kairon.shared.data.audit.data_objects import AuditLogData
 from kairon.shared.data.audit.processor import AuditDataProcessor
-from kairon.shared.data.constant import DEFAULT_SYSTEM_PROMPT, STORY_EVENT
-from kairon.shared.data.data_objects import EventConfig, Slots, LLMSettings, DemoRequestLogs
+from kairon.shared.data.constant import STORY_EVENT
+from kairon.shared.data.data_objects import EventConfig, Slots, DemoRequestLogs
 from kairon.shared.data.processor import MongoProcessor
 from kairon.shared.data.utils import DataUtility
 from kairon.shared.models import TemplateType
@@ -3270,3 +3270,17 @@ class TestUtility:
         validate_and_send_mail_mock.assert_called_once_with(
             email, expected_subject, expected_body
         )
+
+    def test_update_config(self):
+        data = yaml.safe_load(open("./tests/testing_data/config_kcomponents.yml"))
+        bot = "test_config_update"
+        Utility.update_config_components(data['pipeline'], bot=bot)
+        assert any(component['name'] == 'kairon.nlu.classifier.LLMClassifier' and component['bot_id'] == bot
+                   for component in data['pipeline'])
+
+    def test_update_config_excluded_components(self):
+        data = yaml.safe_load(open("./tests/testing_data/config_spacy.yml"))
+        bot = "test_config_update"
+        Utility.update_config_components(data['pipeline'], bot=bot)
+        assert all( 'bot_id' not in component
+                   for component in data['pipeline'])

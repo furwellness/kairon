@@ -11,7 +11,7 @@ from rasa.engine.storage.storage import ModelStorage
 import faiss
 import rasa.utils.io as io_utils
 import os
-from rasa.shared.nlu.constants import TEXT, INTENT
+from rasa.shared.nlu.constants import TEXT, INTENT, ENTITIES
 import litellm
 import numpy as np
 from tqdm import tqdm
@@ -30,7 +30,7 @@ if typing.TYPE_CHECKING:
 class LLMClassifier(GraphComponent, IntentClassifier, ABC):
     """Intent and Entity classifier using the OpenAI Completion framework"""
 
-    system_prompt = "You will be provided with a text, and your task is to classify its intent as {0}. Provide output in json format with the following keys intent, explanation, text."
+    system_prompt = "You will be provided with a text, and your task is to classify its intent and entities as {0}. Provide output in json format with the following keys intent, explanation, text."
 
     def __init__(
         self,
@@ -76,7 +76,7 @@ class LLMClassifier(GraphComponent, IntentClassifier, ABC):
             self.api_key = os.environ.get("API_KEY")
         else:
             raise KeyError(
-                f"either set bot_id'in OpenAIClassifier config or set OPENAI_API_KEY in environment variables"
+                f"either set bot_id'in LLMClassifier config or set OPENAI_API_KEY in environment variables"
             )
 
     def get_embeddings(self, text):
@@ -91,7 +91,11 @@ class LLMClassifier(GraphComponent, IntentClassifier, ABC):
         vector_map = []
         for example in tqdm(training_data.intent_examples):
             vector_map.append(self.get_embeddings(example.get(TEXT)))
-            data_map.append({"text": example.get(TEXT), "intent": example.get(INTENT)})
+            data = {"text": example.get(TEXT), "intent": example.get(INTENT)}
+            entities = example.get(ENTITIES)
+            if entities:
+                data['entities'] = entities
+            data_map.append(entities)
         np_vector = np.asarray(vector_map, dtype=np.float32)
         self.vector = faiss.IndexFlatIP(len(vector_map[0]))
         self.vector.add(np_vector)
@@ -108,19 +112,23 @@ class LLMClassifier(GraphComponent, IntentClassifier, ABC):
         intents = {"nlu_fallback"}
         for idx, value in enumerate(indx[0]):
             if dist[0][idx] >= 0.7:
-                context += f"text: {self.data[value]['text']}\nintent: {self.data[value]['intent']}\n\n"
+                data = {'intent': self.data[value]['intent']}
+                entities = self.data[value].get('entities')
+                if entities:
+                    data['entities'] = entities
+                context += f"text: {self.data[value]['text']}\noutput:{json.dumps(data)}\n\n"
                 intents.add(self.data[value]['intent'])
         messages = [
             {"role": "system", "content": self.system_prompt.format(intents)},
             {
                 "role": "user",
                 "content": f'''##{self.system_prompt.format(intents)}
-                ##Based on the Intent Context generate the intent.
-                If intent must belongs to {intents}
+                ##Based on the Intent Context generate the intent and entities.
+                An intent must belongs to {intents}
                 Intent Context:
                 {context}
                 text: {text}
-                intent: 
+                output: 
                 ''',
             }
         ]
@@ -141,6 +149,7 @@ class LLMClassifier(GraphComponent, IntentClassifier, ABC):
         print(response)
         responses = json.loads(response.choices[0]["message"]["content"])
         intent = responses["intent"] if "intent" in responses.keys() else None
+        entities = responses["entities"] if "entities" in responses.keys() else []
         if intent not in intents:
             explanation = f"invalid intent predicted {intent}, falling back to nlu_fallback"
             intent = "nlu_fallback"
@@ -150,7 +159,7 @@ class LLMClassifier(GraphComponent, IntentClassifier, ABC):
                 if "explanation" in responses.keys()
                 else None
             )
-        return intent, explanation
+        return intent, entities,explanation
 
     def process(self, messages: List[Message]) -> List[Message]:
         """Return the most likely intent and its probability for a message."""
@@ -160,11 +169,13 @@ class LLMClassifier(GraphComponent, IntentClassifier, ABC):
                 # receive enough training data
                 intent = None
                 intent_ranking = []
+                entites = []
             else:
-                label, reason = self.predict(message.get(TEXT))
+                label, entities, reason = self.predict(message.get(TEXT))
                 intent = {"name": label, "confidence": 1, "reason": reason}
                 intent_ranking = []
             message.set("intent", intent, add_to_output=True)
+            message.set(ENTITIES, entities, add_to_output=True)
             message.set("intent_ranking", intent_ranking, add_to_output=True)
         return messages
 

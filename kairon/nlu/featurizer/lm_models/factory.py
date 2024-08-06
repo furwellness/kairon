@@ -1,7 +1,7 @@
-from kairon.shared.nlu.featurizer.lm_models.transformers.bert import BertModel
-from kairon.shared.nlu.featurizer.lm_models.transformers.distilbert import DistilBertModel
-from kairon.shared.nlu.featurizer.lm_models.transformers.xlm_roberta import XLMRobertaModel
-from kairon.shared.nlu.featurizer.lm_models.transformers.roberta import RobertaModel
+from kairon.nlu.featurizer.lm_models.transformers.bert import BertModel
+from kairon.nlu.featurizer.lm_models.transformers.distilbert import DistilBertModel
+from kairon.nlu.featurizer.lm_models.transformers.xlm_roberta import XLMRobertaModel
+from kairon.nlu.featurizer.lm_models.transformers.roberta import RobertaModel
 
 
 class ModelFactory:

@@ -4,7 +4,7 @@ from typing import List, Text, Tuple
 from numpy import ndarray, mean
 from transformers import TFXLMRobertaModel, XLMRobertaTokenizerFast
 
-from kairon.shared.nlu.featurizer.lm_models.base import BaseModel
+from kairon.nlu.featurizer.lm_models.base import BaseModel
 
 logger = logging.getLogger(__name__)
 

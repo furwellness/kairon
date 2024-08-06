@@ -410,11 +410,12 @@ class TrainingDataValidator(Validator):
         from rasa.engine.recipes.default_components import DEFAULT_COMPONENTS
         components = [item.__name__ for item in DEFAULT_COMPONENTS]
         components = list(set(components).difference(set(Utility.environment['core']['deprecated-components'])))
+        kcomponents = [component['name']  for component in Utility.environment['core']['components']]
         if config.get('pipeline'):
             for item in config['pipeline']:
                 component_cfg = item['name']
                 if not (component_cfg in components or
-                        component_cfg in Utility.environment['core']['components']):
+                        component_cfg in kcomponents):
                     config_errors.append("Invalid component " + component_cfg)
         else:
             config_errors.append("You didn't define any pipeline")
